@@ -18,9 +18,19 @@ describe('POST /diagnose', () => {
     expect(llmService.generateDiagnosis).not.toHaveBeenCalled();
   });
 
-  it('rejects when symptoms is not an array', async () => {
-    await request(app).post('/diagnose').send({ symptoms: 'headache' }).expect(400);
-    expect(llmService.generateDiagnosis).not.toHaveBeenCalled();
+  it('accepts symptoms as free text', async () => {
+    llmService.generateDiagnosis.mockResolvedValue({
+      condition: 'tension headache',
+      severity: 1,
+      reasoning: 'Common pattern for stress.',
+    });
+
+    const res = await request(app).post('/diagnose').send({ symptoms: 'headache and stress' }).expect(200);
+    expect(res.body.condition).toBe('tension headache');
+    expect(llmService.generateDiagnosis).toHaveBeenCalledWith({
+      symptoms: ['headache and stress'],
+      image: null,
+    });
   });
 
   it('rejects when symptoms is empty array', async () => {
@@ -30,6 +40,11 @@ describe('POST /diagnose', () => {
 
   it('rejects when symptoms contains non-strings', async () => {
     await request(app).post('/diagnose').send({ symptoms: ['headache', 123] }).expect(400);
+    expect(llmService.generateDiagnosis).not.toHaveBeenCalled();
+  });
+
+  it('rejects when symptoms is neither string nor array', async () => {
+    await request(app).post('/diagnose').send({ symptoms: 42 }).expect(400);
     expect(llmService.generateDiagnosis).not.toHaveBeenCalled();
   });
 
@@ -57,7 +72,10 @@ describe('POST /diagnose', () => {
       severity: 1,
       reasoning: 'Common pattern for stress.',
     });
-    expect(llmService.generateDiagnosis).toHaveBeenCalledWith(['headache']);
+    expect(llmService.generateDiagnosis).toHaveBeenCalledWith({
+      symptoms: ['headache'],
+      image: null,
+    });
   });
 
   it('returns severity as integer', async () => {
@@ -82,5 +100,54 @@ describe('POST /diagnose', () => {
       .send({ symptoms: ['headache'] })
       .expect(503);
     expect(res.body.error).toBe('llm_failure');
+  });
+
+  it('passes optional image to the LLM service', async () => {
+    llmService.generateDiagnosis.mockResolvedValue({
+      condition: 'skin irritation',
+      severity: 1,
+      reasoning: 'Mild visual irritation.',
+    });
+
+    await request(app)
+      .post('/diagnose')
+      .send({
+        symptoms: 'red patch on arm',
+        imageMimeType: 'image/png',
+        imageData: 'iVBORw0KGgoAAAANSUhEUg==',
+      })
+      .expect(200);
+
+    expect(llmService.generateDiagnosis).toHaveBeenCalledWith({
+      symptoms: ['red patch on arm'],
+      image: {
+        mimeType: 'image/png',
+        data: 'iVBORw0KGgoAAAANSUhEUg==',
+      },
+    });
+  });
+
+  it('accepts image-only diagnosis requests', async () => {
+    llmService.generateDiagnosis.mockResolvedValue({
+      condition: 'possible rash',
+      severity: 1,
+      reasoning: 'Visual pattern appears mild.',
+    });
+
+    await request(app)
+      .post('/diagnose')
+      .send({
+        imageMimeType: 'image/jpeg',
+        imageData: '/9j/4AAQSkZJRgABAQAAAQABAAD',
+      })
+      .expect(200);
+
+    expect(llmService.generateDiagnosis).toHaveBeenCalledWith({
+      symptoms: [],
+      image: {
+        mimeType: 'image/jpeg',
+        data: '/9j/4AAQSkZJRgABAQAAAQABAAD',
+      },
+    });
   });
 });

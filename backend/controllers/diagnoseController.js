@@ -9,43 +9,117 @@ const UNSAFE_PATTERNS = [
 ];
 
 function isUnsafeInput(symptoms) {
-  const text = Array.isArray(symptoms) ? symptoms.join(' ').toLowerCase() : String(symptoms).toLowerCase();
+  const text = symptoms.join(' ').toLowerCase();
   return UNSAFE_PATTERNS.some((re) => re.test(text));
 }
 
-function diagnose(req, res) {
-  const { symptoms } = req.body;
-
+function validateSymptoms(symptoms, allowEmpty) {
   if (symptoms === undefined || symptoms === null) {
-    return res.status(400).json({ error: 'symptoms required' });
+    if (allowEmpty) {
+      return { normalized: [] };
+    }
+    return { error: 'symptoms required' };
   }
+
+  if (typeof symptoms === 'string') {
+    const normalizedText = symptoms.trim();
+    if (!normalizedText) {
+      if (allowEmpty) {
+        return { normalized: [] };
+      }
+      return { error: 'symptoms must contain at least one non-empty string' };
+    }
+    return { normalized: [normalizedText] };
+  }
+
   if (!Array.isArray(symptoms)) {
-    return res.status(400).json({ error: 'symptoms must be an array' });
+    return { error: 'symptoms must be a string or an array of strings' };
   }
   if (symptoms.length < 1) {
-    return res.status(400).json({ error: 'symptoms must contain at least one item' });
+    return { error: 'symptoms must contain at least one item' };
   }
-  const allStrings = symptoms.every((s) => typeof s === 'string');
-  if (!allStrings) {
-    return res.status(400).json({ error: 'symptoms must contain only strings' });
+  if (!symptoms.every((s) => typeof s === 'string')) {
+    return { error: 'symptoms must contain only strings' };
   }
 
-  if (isUnsafeInput(symptoms)) {
+  const normalized = symptoms.map((s) => s.trim()).filter(Boolean);
+  if (normalized.length < 1) {
+    if (allowEmpty) {
+      return { normalized: [] };
+    }
+    return { error: 'symptoms must contain at least one non-empty string' };
+  }
+
+  return { normalized };
+}
+
+function validateOptionalImage(imageData, imageMimeType) {
+  const hasImageData = imageData !== undefined && imageData !== null && String(imageData).trim() !== '';
+  const hasImageMimeType = imageMimeType !== undefined && imageMimeType !== null && String(imageMimeType).trim() !== '';
+
+  if (!hasImageData && !hasImageMimeType) {
+    return { image: null };
+  }
+
+  if (!hasImageData || !hasImageMimeType) {
+    return { error: 'imageData and imageMimeType are required together' };
+  }
+
+  if (typeof imageData !== 'string' || typeof imageMimeType !== 'string') {
+    return { error: 'imageData and imageMimeType must be strings' };
+  }
+
+  const mimeType = imageMimeType.trim().toLowerCase();
+  if (!/^image\/[a-z0-9.+-]+$/.test(mimeType)) {
+    return { error: 'imageMimeType must be a valid image MIME type' };
+  }
+
+  const data = imageData.trim();
+  if (!data) {
+    return { error: 'imageData must be non-empty' };
+  }
+
+  return { image: { data, mimeType } };
+}
+
+async function diagnose(req, res) {
+  const { symptoms, imageData, imageMimeType } = req.body || {};
+  const imageValidation = validateOptionalImage(imageData, imageMimeType);
+  if (imageValidation.error) {
+    return res.status(400).json({ error: imageValidation.error });
+  }
+  const validation = validateSymptoms(symptoms, Boolean(imageValidation.image));
+  if (validation.error) {
+    return res.status(400).json({ error: validation.error });
+  }
+
+  const normalizedSymptoms = validation.normalized;
+  const image = imageValidation.image;
+
+  if (normalizedSymptoms.length > 0 && isUnsafeInput(normalizedSymptoms)) {
     return res.status(400).json({ error: 'unsafe_input' });
   }
 
-  llmService
-    .generateDiagnosis(symptoms)
-    .then((result) => {
-      res.json({
-        condition: result.condition,
-        severity: result.severity,
-        reasoning: result.reasoning,
-      });
-    })
-    .catch(() => {
-      res.status(503).json({ error: 'llm_failure' });
+  try {
+    const result = await llmService.generateDiagnosis({
+      symptoms: normalizedSymptoms,
+      image,
     });
+    return res.json({
+      condition: result.condition,
+      severity: result.severity,
+      reasoning: result.reasoning,
+    });
+  } catch (err) {
+    const status = Number.isInteger(err?.statusCode) ? err.statusCode : 503;
+    const message = err?.publicMessage || 'Diagnosis service temporarily unavailable';
+
+    console.error('Diagnosis LLM error:', err?.message || String(err));
+    return res.status(status).json({
+      error: 'llm_failure',
+      message,
+    });
+  }
 }
 
 module.exports = { diagnose };
