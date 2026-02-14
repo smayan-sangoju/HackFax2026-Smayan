@@ -5,7 +5,7 @@ const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   // API keys - loaded from env, not used yet
   googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
-  // Add other API keys here as needed for later modules
+  geminiApiKey: process.env.GEMINI_API_KEY || '',
 };
 
 module.exports = config;
