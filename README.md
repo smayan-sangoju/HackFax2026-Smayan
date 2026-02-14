@@ -14,4 +14,8 @@ See `frontend/README.md` for details.
 cd backend && npm install && npm start
 ```
 
-Ensure the backend runs on the port configured in the frontend (default: 5000). Set `PORT=5000` when starting the backend if needed.
+1. Start the backend first (default port 3000).
+2. Start the frontend. It proxies `/api` to `http://localhost:3000`.
+3. If the backend runs on a different port (e.g. 30000), create `frontend/.env` with:
+   `VITE_PROXY_TARGET=http://localhost:30000`
+4. Set `GEMINI_API_KEY` and `ELEVENLABS_API_KEY` in `backend/.env` for diagnosis and TTS.

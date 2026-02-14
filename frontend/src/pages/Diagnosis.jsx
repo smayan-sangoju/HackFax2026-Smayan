@@ -1,11 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import * as api from '../api/backend';
 import styles from './Diagnosis.module.css';
 
+// Backend uses severity 1–3: 1=mild, 2=moderate, 3=severe
 function getSeverityInfo(severity) {
   if (severity == null) return { label: 'Moderate concern', class: styles.severityMid };
-  if (severity <= 3) return { label: 'Low concern', class: styles.severityLow };
-  if (severity <= 6) return { label: 'Moderate concern', class: styles.severityMid };
+  if (severity <= 1) return { label: 'Low concern', class: styles.severityLow };
+  if (severity <= 2) return { label: 'Moderate concern', class: styles.severityMid };
   return { label: 'High concern', class: styles.severityHigh };
 }
 
@@ -29,8 +31,10 @@ export default function Diagnosis() {
   }
 
   const { diagnosis, hospitals = [], rankResult, latitude, longitude } = state;
-  const top3 = rankResult?.top3 ?? [];
+  const top3 = rankResult?.top3 ?? rankResult?.data?.top3 ?? [];
   const severityInfo = getSeverityInfo(diagnosis.severity);
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsError, setTtsError] = useState(null);
 
   const mapUrl =
     latitude != null && longitude != null
@@ -63,6 +67,31 @@ export default function Diagnosis() {
         </h2>
         <h3 className={styles.condition}>{diagnosis.condition}</h3>
         <p className={styles.reasoning}>{diagnosis.reasoning}</p>
+        <button
+          type="button"
+          className={styles.ttsButton}
+          onClick={async () => {
+            setTtsError(null);
+            setTtsLoading(true);
+            try {
+              const text = `${diagnosis.condition}. ${diagnosis.reasoning}`;
+              const blob = await api.synthesizeTts({ text });
+              const url = URL.createObjectURL(blob);
+              const audio = new Audio(url);
+              await audio.play();
+              audio.onended = () => URL.revokeObjectURL(url);
+            } catch {
+              setTtsError('Audio playback is not available.');
+            } finally {
+              setTtsLoading(false);
+            }
+          }}
+          disabled={ttsLoading}
+          aria-label="Listen to results"
+        >
+          {ttsLoading ? 'Playing...' : '🔊 Listen to results'}
+        </button>
+        {ttsError && <p className={styles.ttsError}>{ttsError}</p>}
       </section>
 
       <section className={styles.card} aria-labelledby="severity-heading">
@@ -74,7 +103,7 @@ export default function Diagnosis() {
             {severityInfo.label}
           </span>
           <span className={styles.severityValue}>
-            ({diagnosis.severity} out of 10)
+            ({diagnosis.severity} of 3)
           </span>
         </div>
       </section>

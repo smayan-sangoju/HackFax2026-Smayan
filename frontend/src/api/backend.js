@@ -7,9 +7,9 @@
 const BASE_URL =
   import.meta.env.DEV
     ? '/api'
-    : (import.meta.env.REACT_APP_API_URL ||
-       import.meta.env.VITE_API_URL ||
-       'http://localhost:5000');
+    : (import.meta.env.VITE_API_URL ||
+       import.meta.env.REACT_APP_API_URL ||
+       'http://localhost:3000');
 
 async function request(endpoint, options = {}) {
   const url = `${BASE_URL.replace(/\/$/, '')}${endpoint}`;
@@ -25,10 +25,11 @@ async function request(endpoint, options = {}) {
     const err = new Error(`API error: ${res.status} ${res.statusText}`);
     err.status = res.status;
     err.response = res;
+    const text = await res.text();
     try {
-      err.body = await res.json();
+      err.body = text ? JSON.parse(text) : {};
     } catch {
-      err.body = await res.text();
+      err.body = { error: text || res.statusText };
     }
     throw err;
   }
@@ -64,8 +65,9 @@ export async function getHospitals(body) {
 
 /**
  * POST /waittimes
- * @param {{ hospitals: string[] }} body
- * @returns {Promise<Array<{ name: string, waitTime: number }>>}
+ * Backend expects hospitals array with { name, distance?, travelTime? }.
+ * Returns { data: hospitalsWithWait }.
+ * @param {{ hospitals: Array<{ name: string, distance?: number, travelTime?: number }> }} body
  */
 export async function getWaitTimes(body) {
   return request('/waittimes', {
@@ -76,39 +78,41 @@ export async function getWaitTimes(body) {
 
 /**
  * POST /rank
- * @param {{ hospitals: any[], waitTimes: any[], diagnosis: any }} body
- * @returns {Promise<{ top3: Array<{ name: string, totalTime: number }> }>}
+ * Backend expects { hospitals: [{ name, travelTime, waitTime }], severity: 1|2|3 }.
+ * Returns { data: { top3 } }.
+ * @param {{ hospitals: any[], severity: number }} body
  */
 export async function rank(body) {
   return request('/rank', {
     method: 'POST',
     body: JSON.stringify({
       hospitals: body.hospitals,
-      waitTimes: body.waitTimes,
-      diagnosis: body.diagnosis,
+      severity: body.severity,
     }),
   });
 }
 
-// --- Auth (placeholder / simulated until backend implements) ---
-
 /**
- * Register user. Placeholder: simulates success.
- * @param {{ firstName: string, lastName: string, age: number, gender: string, email: string, password: string }} data
- * @returns {Promise<{ success: boolean }>}
+ * POST /tts (ElevenLabs text-to-speech)
+ * Returns audio/mpeg binary. Use for playback.
+ * @param {{ text: string, languageCode?: string, voiceId?: string }} body
+ * @returns {Promise<Blob>}
  */
-export async function registerUser(data) {
-  // Simulate network delay
-  await new Promise((r) => setTimeout(r, 600));
-  return { success: true };
-}
-
-/**
- * Login user. Placeholder: simulates success, returns mock token.
- * @param {{ email: string, password: string }} data
- * @returns {Promise<{ success: boolean, token: string }>}
- */
-export async function loginUser(data) {
-  await new Promise((r) => setTimeout(r, 600));
-  return { success: true, token: 'mock-token' };
+export async function synthesizeTts(body) {
+  const url = `${BASE_URL.replace(/\/$/, '')}/tts`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: body.text,
+      languageCode: body.languageCode,
+      voiceId: body.voiceId,
+    }),
+  });
+  if (!res.ok) {
+    const err = new Error(res.status === 503 ? 'TTS service not configured' : 'Failed to generate speech');
+    err.status = res.status;
+    throw err;
+  }
+  return res.blob();
 }

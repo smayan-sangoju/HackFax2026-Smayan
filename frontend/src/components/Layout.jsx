@@ -8,10 +8,6 @@ export default function Layout() {
         <Link to="/" className={styles.brand}>
           <span className={styles.brandText}>Triage</span><span className={styles.brandHighlight}>Sense</span>
         </Link>
-        <nav className={styles.nav}>
-          <Link to="/login" className={styles.signIn}>Sign in</Link>
-          <Link to="/register" className={styles.createAccount}>Create account</Link>
-        </nav>
       </header>
       <div className={styles.content}>
         <Outlet />

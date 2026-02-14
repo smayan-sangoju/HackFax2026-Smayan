@@ -3,6 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import * as api from '../api/backend';
 import styles from './Symptoms.module.css';
 
+function parseHospitals(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.data) && raw.data.length > 0 && typeof raw.data[0] === 'object') return raw.data;
+  if (Array.isArray(raw?.hospitals)) return raw.hospitals;
+  return [];
+}
+
 function getGeolocation() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -39,55 +46,60 @@ export default function Symptoms() {
       const diagnosis =
         diagnosisRaw?.condition != null
           ? diagnosisRaw
-          : { condition: 'Unknown', severity: 0, reasoning: 'Diagnosis pending.' };
+          : { condition: 'Unknown', severity: 1, reasoning: 'Diagnosis pending.' };
+      // Backend uses severity 1–3 (mild/moderate/severe). Ensure valid value.
+      const severity = Math.min(3, Math.max(1, Number(diagnosis.severity) || 1));
 
-      const { latitude, longitude } = await getGeolocation();
-      const hospitalsRaw = await api.getHospitals({ latitude, longitude });
-      const hospitals = Array.isArray(hospitalsRaw)
-        ? hospitalsRaw
-        : Array.isArray(hospitalsRaw?.data)
-          ? hospitalsRaw.data
-          : Array.isArray(hospitalsRaw?.hospitals)
-            ? hospitalsRaw.hospitals
-            : [];
+      let latitude = null;
+      let longitude = null;
+      let hospitals = [];
+      try {
+        const coords = await getGeolocation();
+        latitude = coords.latitude;
+        longitude = coords.longitude;
+        const hospitalsRaw = await api.getHospitals({ latitude, longitude });
+        hospitals = parseHospitals(hospitalsRaw);
+      } catch (geoErr) {
+        // Location failed (timeout, denied, unavailable) — continue without hospitals
+      }
 
-      const hospitalNames = hospitals.map((h) => h.name).filter(Boolean);
-      const waitTimesRaw =
-        hospitalNames.length > 0
-          ? await api.getWaitTimes({ hospitals: hospitalNames })
-          : [];
-      const waitTimes = Array.isArray(waitTimesRaw)
-        ? waitTimesRaw
-        : Array.isArray(waitTimesRaw?.data)
-          ? waitTimesRaw.data
-          : [];
+      let hospitalsWithWait = hospitals;
+      if (hospitals.length > 0) {
+        const waitRes = await api.getWaitTimes({ hospitals });
+        hospitalsWithWait = Array.isArray(waitRes?.data) ? waitRes.data : hospitals;
+      }
 
-      const rankRaw = await api.rank({
-        hospitals,
-        waitTimes,
-        diagnosis,
-      });
-      const rankResult =
-        rankRaw?.top3 != null
-          ? rankRaw
-          : { top3: Array.isArray(rankRaw?.data) ? rankRaw.data : [] };
+      let rankResult = { top3: [] };
+      if (hospitalsWithWait.length > 0) {
+        const rankRaw = await api.rank({ hospitals: hospitalsWithWait, severity });
+        rankResult = rankRaw?.data ?? rankRaw ?? { top3: [] };
+      }
 
       navigate('/diagnosis', {
         state: {
-          diagnosis,
-          hospitals,
-          waitTimes,
+          diagnosis: { ...diagnosis, severity },
+          hospitals: hospitalsWithWait,
           rankResult,
           latitude,
           longitude,
         },
       });
     } catch (err) {
-      setError(
-        err.message === 'Failed to fetch'
-          ? 'We couldn\'t connect. Please check your internet and try again.'
-          : err.message || 'We couldn\'t complete this step. Please try again.'
-      );
+      const body = err?.body;
+      const msg = body?.message ?? body?.error ?? err?.message;
+      if (body?.error === 'unsafe_input') {
+        setError('Please describe your symptoms in a different way. If you need immediate help, call 911.');
+      } else if (body?.error === 'llm_failure' || err?.status === 503) {
+        setError(msg || 'The diagnosis service is temporarily unavailable. Please try again in a few moments.');
+      } else if (err?.message === 'Failed to fetch') {
+        setError('We couldn\'t connect to the backend. Make sure the backend is running (cd backend && npm start).');
+      } else if (err?.status === 500) {
+        setError(msg || 'The server encountered an error. Check that GEMINI_API_KEY is set in backend/.env and the backend terminal for details.');
+      } else if (msg?.toLowerCase().includes('timeout') || err?.code === 3) {
+        setError('Location request timed out. Please allow location access and try again, or check your connection.');
+      } else {
+        setError(msg || 'We couldn\'t complete this step. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
