@@ -90,6 +90,54 @@ function isInvalidImageError(err) {
   );
 }
 
+const AUDIO_TRANSCRIBE_PROMPT = `You are a strict medical transcription assistant. Listen carefully to this audio recording.
+
+CRITICAL RULES:
+- ONLY transcribe words that were clearly spoken by the patient. Do NOT invent, guess, or hallucinate any text.
+- If the audio is silent, contains only noise, or has no clear speech, return symptomsText as an empty string "".
+- Do NOT add any words, sentences, or symptoms that were not explicitly said.
+- Preserve the patient's original spoken language exactly. Do NOT translate.
+- If the patient speaks in Hindi, transcribe in Hindi. If Spanish, transcribe in Spanish. Etc.
+
+Output ONLY strict JSON:
+{
+  "symptomsText": "...",
+  "languageCode": "en"
+}
+
+Rules:
+- symptomsText: ONLY the exact words spoken by the patient, nothing more. Empty string if no clear speech.
+- languageCode: ISO 639-1 code of the spoken language (e.g. "en", "es", "hi", "te", "ar")
+- Do NOT include markdown, code fences, or any text outside the JSON.`;
+
+const AUDIO_LANGUAGE_DETECT_PROMPT = `Listen to this audio and detect the spoken language. Output ONLY strict JSON:
+{
+  "languageCode": "en"
+}
+
+Rules:
+- languageCode: ISO 639-1 code of the spoken language
+- Do NOT include markdown, code fences, or any text outside the JSON.`;
+
+function buildDiagnosisTranslationPrompt(condition, reasoning, targetLanguageCode) {
+  const langLabel = LANGUAGE_LABELS[targetLanguageCode] || targetLanguageCode;
+  return `Translate the following medical diagnosis into ${langLabel} (${targetLanguageCode}). Keep it simple, use everyday words.
+
+Condition: ${condition}
+Reasoning: ${reasoning}
+
+Output ONLY strict JSON:
+{
+  "condition": "...",
+  "reasoning": "..."
+}
+
+Rules:
+- Translate both fields into ${langLabel}.
+- Keep the same meaning and tone.
+- Do NOT include markdown, code fences, or any text outside the JSON.`;
+}
+
 const PROMPT_TEMPLATE = `You are a primary care doctor explaining triage results to an elderly patient. Use very simple, everyday words—like you're talking to a grandparent.
 
 Patient's symptoms: {{symptoms}}

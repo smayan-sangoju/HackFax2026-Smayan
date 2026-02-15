@@ -416,18 +416,6 @@ export default function Diagnosis() {
         </section>
       )}
 
-      {top3.length > 0 && (
-        <div className={styles.actions}>
-          <button
-            type="button"
-            className={styles.primary}
-            onClick={() => navigate('/ranked', { state: { top3 } })}
-          >
-            View ranked hospitals
-          </button>
-        </div>
-      )}
-
       <p className={styles.disclaimer}>
         This is not medical advice. Information provided is for general guidance only based on user-described symptoms. Wait times are estimates and may change. In an emergency, call 911.
       </p>

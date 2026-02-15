@@ -284,11 +284,6 @@ export default function Symptoms() {
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
           audioChunksRef.current.push(event.data);
-          const now = Date.now();
-          if (now - lastTranscribeAtRef.current >= 2500) {
-            lastTranscribeAtRef.current = now;
-            transcribeCurrentAudio(false);
-          }
         }
       };
 
@@ -543,7 +538,7 @@ export default function Symptoms() {
 
             <div className={styles.inputActions}>
               <span className={styles.voiceStatus}>
-                {recording && 'Recording live with real-time transcription... speak naturally, then stop.'}
+                {recording && 'Recording... speak naturally, then press stop to transcribe.'}
                 {!recording && transcribing && 'Finalizing transcription from your recording...'}
                 {!recording && !transcribing && detectedLanguage && `Detected language: ${LANGUAGE_LABELS[detectedLanguage] || detectedLanguage} (${detectedLanguage})`}
                 {!recording && !transcribing && !detectedLanguage && 'Use voice recording. We transcribe automatically while you speak.'}
