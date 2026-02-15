@@ -42,18 +42,6 @@ function blobToBase64(blob) {
   });
 }
 
-function getFriendlyError(err, fallback) {
-  const raw = err?.body?.message || err?.body?.error || err?.message || fallback;
-  const text = String(raw || '').trim();
-  if (/Cannot POST \/transcribe-audio/i.test(text)) {
-    return 'Backend route /transcribe-audio is unavailable. Restart backend and frontend dev servers.';
-  }
-  if (/<!doctype html>|<html/i.test(text)) {
-    return fallback;
-  }
-  return text || fallback;
-}
-
 function formatDuration(totalSeconds) {
   const mins = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
   const secs = (totalSeconds % 60).toString().padStart(2, '0');
@@ -73,47 +61,55 @@ function inferLanguageFromText(text) {
 }
 
 const LANGUAGE_LABELS = {
-  en: 'English',
-  es: 'Spanish',
-  fr: 'French',
-  de: 'German',
-  it: 'Italian',
-  pt: 'Portuguese',
-  pl: 'Polish',
-  hi: 'Hindi',
-  ar: 'Arabic',
-  zh: 'Chinese',
-  ja: 'Japanese',
-  ko: 'Korean',
-  nl: 'Dutch',
-  ru: 'Russian',
-  sv: 'Swedish',
-  tr: 'Turkish',
-  uk: 'Ukrainian',
-  vi: 'Vietnamese',
-  id: 'Indonesian',
-  fil: 'Filipino',
-  ta: 'Tamil',
-  te: 'Telugu',
-  cs: 'Czech',
-  da: 'Danish',
-  fi: 'Finnish',
-  el: 'Greek',
-  hu: 'Hungarian',
-  no: 'Norwegian',
-  ro: 'Romanian',
-  sk: 'Slovak',
+  en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
+  pt: 'Portuguese', pl: 'Polish', hi: 'Hindi', ar: 'Arabic', zh: 'Chinese',
+  ja: 'Japanese', ko: 'Korean', nl: 'Dutch', ru: 'Russian', sv: 'Swedish',
+  tr: 'Turkish', uk: 'Ukrainian', vi: 'Vietnamese', id: 'Indonesian',
+  fil: 'Filipino', ta: 'Tamil', te: 'Telugu', cs: 'Czech', da: 'Danish',
+  fi: 'Finnish', el: 'Greek', hu: 'Hungarian', no: 'Norwegian',
+  ro: 'Romanian', sk: 'Slovak',
 };
+
+function getFriendlyError(err, fallback) {
+  const raw = err?.body?.message || err?.body?.error || err?.message || fallback;
+  const text = String(raw || '').trim();
+  if (/Cannot POST \/transcribe-audio/i.test(text)) {
+    return 'Backend route /transcribe-audio is unavailable. Restart backend and frontend dev servers.';
+  }
+  if (/<!doctype html>|<html/i.test(text)) return fallback;
+  return text || fallback;
+}
+
+function handleApiError(err, setError) {
+  const body = err?.body;
+  const msg = body?.message ?? body?.error ?? err?.message;
+  if (body?.error === 'unsafe_input') {
+    setError('Please describe your symptoms in a different way. If you need immediate help, call 911.');
+  } else if (body?.error === 'llm_failure' || err?.status === 503) {
+    setError(msg || 'The diagnosis service is temporarily unavailable. Please try again in a few moments.');
+  } else if (err?.message === 'Failed to fetch') {
+    setError('We couldn\'t connect to the backend. Make sure the backend is running (cd backend && npm start).');
+  } else if (err?.status === 500) {
+    setError(msg || 'The server encountered an error. Check that GEMINI_API_KEY is set in backend/.env.');
+  } else if (msg?.toLowerCase().includes('timeout') || err?.code === 3) {
+    setError('Location request timed out. Please allow location access and try again.');
+  } else if (err?.status === 413 || msg?.toLowerCase().includes('entity too large')) {
+    setError('The photo is too large. Try a smaller image, or describe your symptoms in text.');
+  } else {
+    setError(msg || 'We couldn\'t complete this step. Please try again.');
+  }
+}
 
 export default function Symptoms() {
   const [symptoms, setSymptoms] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Voice recording state
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [detectedLanguage, setDetectedLanguage] = useState(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
@@ -128,9 +124,34 @@ export default function Symptoms() {
   const lastTranscribeAtRef = useRef(0);
   const recordedMimeTypeRef = useRef('audio/webm');
   const baseSymptomsRef = useRef('');
+
+  // Photo state
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [showCamera, setShowCamera] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
+  const uploadInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+
   const navigate = useNavigate();
 
   const mediaRecorderSupported = typeof window !== 'undefined' && typeof window.MediaRecorder !== 'undefined';
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      clearAudioResources();
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
+
+  // --- Voice recording ---
 
   function clearAudioResources() {
     if (timerIntervalRef.current) {
@@ -143,12 +164,10 @@ export default function Symptoms() {
     }
     analyserRef.current = null;
     waveformDataRef.current = null;
-
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -159,14 +178,10 @@ export default function Symptoms() {
     const canvas = waveformCanvasRef.current;
     const analyser = analyserRef.current;
     const dataArray = waveformDataRef.current;
-    if (!canvas || !analyser || !dataArray) {
-      return;
-    }
+    if (!canvas || !analyser || !dataArray) return;
 
     const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
+    if (!ctx) return;
 
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
@@ -176,11 +191,9 @@ export default function Symptoms() {
     }
 
     analyser.getByteTimeDomainData(dataArray);
-
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(0, 0, width, height);
-
     ctx.lineWidth = 2;
     ctx.strokeStyle = '#0f766e';
     ctx.beginPath();
@@ -190,44 +203,25 @@ export default function Symptoms() {
     for (let i = 0; i < dataArray.length; i += 1) {
       const v = dataArray[i] / 128.0;
       const y = (v * height) / 2;
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
       x += sliceWidth;
     }
 
     ctx.lineTo(width, height / 2);
     ctx.stroke();
-
     waveformRafRef.current = requestAnimationFrame(drawWaveform);
   }
 
-  useEffect(() => {
-    return () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
-      clearAudioResources();
-    };
-  }, []);
-
   async function transcribeCurrentAudio(finalPass = false) {
-    if (isTranscribingRef.current || audioChunksRef.current.length === 0) {
-      return;
-    }
+    if (isTranscribingRef.current || audioChunksRef.current.length === 0) return;
 
     try {
       isTranscribingRef.current = true;
-      if (finalPass) {
-        setTranscribing(true);
-      }
+      if (finalPass) setTranscribing(true);
 
       const snapshotBlob = new Blob(audioChunksRef.current, { type: recordedMimeTypeRef.current });
-      if (!snapshotBlob.size) {
-        return;
-      }
+      if (!snapshotBlob.size) return;
 
       const audioData = await blobToBase64(snapshotBlob);
       const transcript = await api.transcribeAudio({
@@ -249,9 +243,7 @@ export default function Symptoms() {
       }
     } finally {
       isTranscribingRef.current = false;
-      if (finalPass) {
-        setTranscribing(false);
-      }
+      if (finalPass) setTranscribing(false);
     }
   }
 
@@ -334,25 +326,110 @@ export default function Symptoms() {
 
   function stopRecording() {
     const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== 'inactive') {
-      recorder.stop();
-    }
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
     setRecording(false);
   }
 
   function toggleRecording() {
-    if (recording) {
-      stopRecording();
-      return;
-    }
+    if (recording) { stopRecording(); return; }
     startRecording();
   }
+
+  // --- Photo ---
+
+  function handlePhotoSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    setPhotoFile(file);
+    const reader = new FileReader();
+    reader.onload = () => setPhotoPreview(reader.result);
+    reader.readAsDataURL(file);
+    setError(null);
+  }
+
+  function handleRemovePhoto() {
+    if (photoPreview && photoPreview.startsWith('blob:')) URL.revokeObjectURL(photoPreview);
+    setPhotoFile(null);
+    setPhotoPreview(null);
+    if (uploadInputRef.current) uploadInputRef.current.value = '';
+  }
+
+  async function handleOpenCamera() {
+    setCameraError(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera is not supported in this browser. Try uploading a photo instead.');
+      return;
+    }
+    try {
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+      cameraStreamRef.current = stream;
+      setShowCamera(true);
+      setError(null);
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (msg.includes('Permission') || msg.includes('denied') || err?.name === 'NotAllowedError') {
+        setCameraError('Camera access was denied. Please allow camera access in your browser settings.');
+      } else if (msg.includes('NotFound') || err?.name === 'NotFoundError') {
+        setCameraError('No camera found on this device.');
+      } else {
+        setCameraError('Could not access camera. Try uploading a photo instead.');
+      }
+    }
+  }
+
+  function handleCloseCamera() {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
+      cameraStreamRef.current = null;
+    }
+    setShowCamera(false);
+    setCameraError(null);
+  }
+
+  function handleCapturePhoto() {
+    const video = videoRef.current;
+    if (!video || !cameraStreamRef.current || video.readyState !== 4) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const file = new File([blob], 'camera-photo.jpg', { type: 'image/jpeg' });
+        setPhotoFile(file);
+        setPhotoPreview(URL.createObjectURL(blob));
+        setError(null);
+        handleCloseCamera();
+      },
+      'image/jpeg',
+      0.9
+    );
+  }
+
+  useEffect(() => {
+    if (!showCamera || !videoRef.current || !cameraStreamRef.current) return;
+    videoRef.current.srcObject = cameraStreamRef.current;
+  }, [showCamera]);
+
+  // --- Submit ---
 
   async function handleSubmit(e) {
     e.preventDefault();
     const trimmed = symptoms.trim();
-    if (!trimmed) {
-      setError('Please describe how you are feeling. Type your symptoms in the box above.');
+    const hasText = trimmed.length > 0;
+    const hasPhoto = photoFile != null;
+
+    if (!hasText && !hasPhoto) {
+      setError('Please describe your symptoms in the box above, add a photo, or both.');
       return;
     }
 
@@ -362,12 +439,12 @@ export default function Symptoms() {
     try {
       const diagnosisRaw = await api.diagnose({
         symptoms: trimmed,
+        imageFile: photoFile || undefined,
         languageCode: detectedLanguage || undefined,
       });
-      const diagnosis =
-        diagnosisRaw?.condition != null
-          ? diagnosisRaw
-          : { condition: 'Unknown', severity: 1, reasoning: 'Diagnosis pending.', languageCode: detectedLanguage || 'en' };
+      const diagnosis = diagnosisRaw?.condition != null
+        ? diagnosisRaw
+        : { condition: 'Unknown', severity: 1, reasoning: 'Diagnosis pending.' };
       const severity = Math.min(3, Math.max(1, Number(diagnosis.severity) || 1));
 
       let latitude = null;
@@ -380,7 +457,7 @@ export default function Symptoms() {
         const hospitalsRaw = await api.getHospitals({ latitude, longitude });
         hospitals = parseHospitals(hospitalsRaw);
       } catch {
-        // Continue without location.
+        // Location failed — continue without hospitals
       }
 
       let hospitalsWithWait = hospitals;
@@ -405,18 +482,10 @@ export default function Symptoms() {
         },
       });
     } catch (err) {
-      const body = err?.body;
-      const msg = getFriendlyError(err, 'We could not complete this step. Please try again.');
-      if (body?.error === 'unsafe_input') {
-        setError('Please describe your symptoms in a different way. If you need immediate help, call 911.');
-      } else if (body?.error === 'llm_failure' || err?.status === 503) {
-        setError(msg || 'The diagnosis service is temporarily unavailable. Please try again in a few moments.');
-      } else if (err?.message === 'Failed to fetch') {
-        setError('We could not connect to the backend. Make sure the backend is running (cd backend && npm start).');
-      } else if (err?.status === 500) {
-        setError(msg || 'The server encountered an error. Check GEMINI_API_KEY in backend/.env.');
+      if (err?.message === 'Please describe your symptoms or add a photo.') {
+        setError('Please describe your symptoms in the box above, add a photo, or both.');
       } else {
-        setError(msg || 'We could not complete this step. Please try again.');
+        handleApiError(err, setError);
       }
     } finally {
       setLoading(false);
@@ -439,18 +508,19 @@ export default function Symptoms() {
       <div className={styles.formAndFeatures}>
         <form onSubmit={handleSubmit} className={styles.form}>
           <label htmlFor="symptoms">How are you feeling?</label>
-          <p className={styles.helper}>Example: "I have chest pain and shortness of breath when I walk."</p>
+          <p className={styles.helper}>Example: &quot;I have chest pain and shortness of breath when I walk.&quot;</p>
           <textarea
             id="symptoms"
             value={symptoms}
             onChange={(e) => setSymptoms(e.target.value)}
             placeholder="Type your symptoms here. For example: headache, dizziness, pain in my arm..."
-            rows={6}
+            rows={5}
             disabled={loading || transcribing}
             autoFocus
             aria-describedby={error ? 'symptoms-error' : undefined}
           />
 
+          {/* Voice recording panel */}
           <div className={styles.recordingPanel}>
             <div className={styles.recordingHeader}>
               <button
@@ -481,10 +551,44 @@ export default function Symptoms() {
             </div>
           </div>
 
+          {/* Photo upload */}
+          <p className={styles.photoLabel}>Add a photo (optional)</p>
+          <p className={styles.photoHint}>Take a clear photo of the affected area or upload one from your device.</p>
+          <input
+            ref={uploadInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handlePhotoSelect}
+            className={styles.fileInput}
+            aria-label="Upload photo from device"
+          />
+
+          {cameraError && (
+            <p className={styles.cameraError} role="alert">{cameraError}</p>
+          )}
+
+          {!photoPreview ? (
+            <div className={styles.photoOptions}>
+              <button type="button" className={styles.addPhotoButton} onClick={handleOpenCamera} disabled={loading}>
+                Take photo
+              </button>
+              <button type="button" className={styles.uploadPhotoButton} onClick={() => uploadInputRef.current?.click()} disabled={loading}>
+                Upload photo
+              </button>
+            </div>
+          ) : (
+            <div className={styles.photoSection}>
+              <div className={styles.photoPreview}>
+                <img src={photoPreview} alt="Your photo" />
+              </div>
+              <button type="button" className={styles.removePhotoButton} onClick={handleRemovePhoto} disabled={loading}>
+                Remove Photo
+              </button>
+            </div>
+          )}
+
           {error && (
-            <p id="symptoms-error" className={styles.error} role="alert">
-              {error}
-            </p>
+            <p id="symptoms-error" className={styles.error} role="alert">{error}</p>
           )}
 
           <button type="submit" disabled={loading || transcribing || recording} className={styles.submit}>
@@ -524,6 +628,22 @@ export default function Symptoms() {
           </div>
         </section>
       </div>
+
+      {showCamera && (
+        <div className={styles.cameraOverlay} role="dialog" aria-label="Camera">
+          <div className={styles.cameraContent}>
+            <video ref={videoRef} autoPlay playsInline muted className={styles.cameraVideo} />
+            <div className={styles.cameraActions}>
+              <button type="button" className={styles.cameraCancelButton} onClick={handleCloseCamera}>
+                Cancel
+              </button>
+              <button type="button" className={styles.cameraCaptureButton} onClick={handleCapturePhoto}>
+                Capture
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

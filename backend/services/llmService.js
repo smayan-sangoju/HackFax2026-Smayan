@@ -90,12 +90,11 @@ function isInvalidImageError(err) {
   );
 }
 
-const PROMPT_TEMPLATE = `You are a statistical medical triage assistant.
+const PROMPT_TEMPLATE = `You are a primary care doctor explaining triage results to an elderly patient. Use very simple, everyday words—like you're talking to a grandparent.
 
-Given the user's symptoms: {{symptoms}}
+Patient's symptoms: {{symptoms}}
 
-Your task:
-- Output ONLY strict JSON in this format:
+Output ONLY strict JSON:
 {
   "condition": "...",
   "severity": 1,
@@ -103,69 +102,28 @@ Your task:
   "languageCode": "en"
 }
 
+CRITICAL - Use simple language only:
+- "condition": Use a short, plain name. GOOD: "Insect bite or sting". BAD: "Localized inflammatory reaction" or "mild infection".
+- "reasoning": Write 2–3 short sentences. Use words a 10-year-old would understand.
+
+BANNED PHRASES (never use these):
+- "The image displays" / "The image shows"
+- "statistically consistent" / "statistically"
+- "The user's description" / "the user"
+- "localized inflammatory" / "inflammatory response" / "inflammatory reaction"
+- "further supports" / "aligns with" / "suggests a"
+- "visual evidence" / "based on analysis"
+
+GOOD reasoning example: "This looks like a reaction to an insect bite or sting. The redness and swelling you're seeing are common with this. It appears to be a moderate reaction—it would be a good idea to have it checked if it gets worse."
+
+BAD reasoning example: "The image displays a localized red area which is statistically consistent with an insect bite. The user's description further supports a significant local inflammatory response."
+
 Rules:
 - No medical advice.
 - Only statistical likelihood.
 - Severity must be an integer: 1 = mild, 2 = moderate, 3 = severe.
-- languageCode must be a lowercase ISO 639-1 code.
 - Use severity 3 for dangerous symptoms (chest pain, fainting, stroke signs, severe bleeding, difficulty breathing).
 - Do NOT include markdown, code fences, or any text outside the JSON.`;
-
-function getLanguageDisplayName(code) {
-  return LANGUAGE_LABELS[code] || code;
-}
-
-function buildDiagnosisTranslationPrompt(condition, reasoning, targetLanguageCode) {
-  const languageName = getLanguageDisplayName(targetLanguageCode);
-  return `Translate the following medical triage fields into ${languageName}.
-
-Return ONLY strict JSON in this format:
-{
-  "condition": "...",
-  "reasoning": "..."
-}
-
-Rules:
-- Translate faithfully.
-- Keep clinical meaning intact.
-- Do not add advice.
-- No markdown or extra text.
-
-Input:
-condition: ${condition}
-reasoning: ${reasoning}`;
-}
-
-const AUDIO_TRANSCRIBE_PROMPT = `You are a medical intake transcription assistant.
-
-You are given an audio recording of a patient describing symptoms.
-
-Return ONLY strict JSON in this format:
-{
-  "symptomsText": "...",
-  "languageCode": "en"
-}
-
-Rules:
-- Transcribe what the user said about symptoms as accurately as possible into symptomsText.
-- Keep symptomsText in the same language spoken by the user.
-- languageCode must be lowercase ISO 639-1 and one of: ${SUPPORTED_LANGUAGES.join(', ')}.
-- If unsure, use "en".
-- Do NOT include markdown, code fences, or text outside JSON.`;
-
-const AUDIO_LANGUAGE_DETECT_PROMPT = `Identify the primary spoken language in this audio clip.
-
-Return ONLY strict JSON in this format:
-{
-  "languageCode": "en"
-}
-
-Rules:
-- languageCode must be lowercase ISO 639-1.
-- Choose only from: ${SUPPORTED_LANGUAGES.join(', ')}.
-- Do not default to English if another language is clearly spoken.
-- Telugu must be returned as "te".
-- Do NOT include markdown, code fences, or extra text.`;
 
 function parseJsonFromText(text) {
   const raw = String(text || '').trim();
@@ -355,15 +313,22 @@ async function translateDiagnosisFields(diagnosis, targetLanguageCode) {
   };
 }
 
+function profileToPrompt(profile) {
+  if (!profile) return '';
+  const parts = [];
+  if (profile.age) parts.push(`Age: ${profile.age}`);
+  if (profile.gender) parts.push(`Gender: ${profile.gender}`);
+  if (profile.heightCm) parts.push(`Height: ${profile.heightCm} cm`);
+  if (profile.weightKg) parts.push(`Weight: ${profile.weightKg} kg`);
+  return parts.length > 0 ? `\n\nPatient info: ${parts.join(', ')}` : '';
+}
+
 async function generateDiagnosis(input) {
   const symptoms = input?.symptoms;
   const image = input?.image || null;
-  const candidateLanguageCode = typeof input?.languageCode === 'string' && input.languageCode.trim()
-    ? input.languageCode.trim().toLowerCase()
-    : null;
-  const requestedLanguageCode = (candidateLanguageCode && SUPPORTED_LANGUAGES.includes(candidateLanguageCode))
-    ? candidateLanguageCode
-    : null;
+  const profile = input?.profile || null;
+  const requestedLanguageCode = input?.languageCode || null;
+  const fallbackLanguageCode = requestedLanguageCode || detectLanguageFromSymptoms(symptoms || []);
 
   if (!Array.isArray(symptoms) || !symptoms.every((s) => typeof s === 'string' && s.trim())) {
     const err = new Error('Invalid symptoms input');
@@ -397,18 +362,11 @@ async function generateDiagnosis(input) {
   const symptomsStr = symptoms.length > 0
     ? symptoms.map((s) => s.trim()).join(', ')
     : 'No textual symptoms provided.';
+  const profileStr = profileToPrompt(profile);
   const imageGuidance = image
     ? 'An image is attached. Use visual evidence from the image together with symptoms.'
     : 'No image is attached. Use only symptoms text.';
-  const autoDetectedLanguageCode = detectLanguageFromSymptoms(symptoms);
-  const fallbackLanguageCode = requestedLanguageCode || autoDetectedLanguageCode;
-  const languageLabel = requestedLanguageCode ? (LANGUAGE_LABELS[requestedLanguageCode] || requestedLanguageCode) : null;
-  const languageInstruction = requestedLanguageCode
-    ? (requestedLanguageCode === 'en'
-      ? 'Return "condition" and "reasoning" in English and set "languageCode" to "en".'
-      : `Return "condition" and "reasoning" in ${languageLabel} and set "languageCode" to "${requestedLanguageCode}".`)
-    : `Detect the primary language used in symptoms and return "condition" and "reasoning" in that same language. Set "languageCode" to one of: ${SUPPORTED_LANGUAGES.join(', ')}. If uncertain, use "en".`;
-  const prompt = `${PROMPT_TEMPLATE.replace('{{symptoms}}', symptomsStr)}\n\n${imageGuidance}\n${languageInstruction}`;
+  const prompt = `${PROMPT_TEMPLATE.replace('{{symptoms}}', symptomsStr)}${profileStr}\n\n${imageGuidance}`;
 
   const parts = [{ text: prompt }];
   if (image) {

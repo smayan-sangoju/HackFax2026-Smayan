@@ -1,5 +1,6 @@
 const llmService = require('../services/llmService');
 const { SUPPORTED_LANGUAGES } = require('../services/ttsService');
+const User = require('../models/User');
 
 const UNSAFE_PATTERNS = [
   /self[- ]?harm/i,
@@ -118,9 +119,26 @@ async function diagnose(req, res) {
   const normalizedSymptoms = validation.normalized;
   const image = imageValidation.image;
   const normalizedLanguageCode = languageValidation.normalized;
+  let profile = null;
 
   if (normalizedSymptoms.length > 0 && isUnsafeInput(normalizedSymptoms)) {
     return res.status(400).json({ error: 'unsafe_input' });
+  }
+
+  if (req.user?.id) {
+    try {
+      const user = await User.findById(req.user.id).lean();
+      if (user) {
+        profile = {
+          age: user.age ?? null,
+          gender: user.gender || '',
+          heightCm: user.heightCm ?? null,
+          weightKg: user.weightKg ?? null,
+        };
+      }
+    } catch (err) {
+      console.warn('Unable to load user profile for diagnose:', err?.message || String(err));
+    }
   }
 
   try {
@@ -128,6 +146,7 @@ async function diagnose(req, res) {
       symptoms: normalizedSymptoms,
       image,
       languageCode: normalizedLanguageCode,
+      profile,
     });
     return res.json({
       condition: result.condition,

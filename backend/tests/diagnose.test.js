@@ -31,6 +31,7 @@ describe('POST /diagnose', () => {
       symptoms: ['headache and stress'],
       image: null,
       languageCode: null,
+      profile: null,
     });
   });
 
@@ -78,6 +79,7 @@ describe('POST /diagnose', () => {
       symptoms: ['headache'],
       image: null,
       languageCode: null,
+      profile: null,
     });
   });
 
@@ -128,6 +130,7 @@ describe('POST /diagnose', () => {
         data: 'iVBORw0KGgoAAAANSUhEUg==',
       },
       languageCode: null,
+      profile: null,
     });
   });
 
@@ -153,6 +156,7 @@ describe('POST /diagnose', () => {
         data: '/9j/4AAQSkZJRgABAQAAAQABAAD',
       },
       languageCode: null,
+      profile: null,
     });
   });
 
@@ -174,6 +178,7 @@ describe('POST /diagnose', () => {
       symptoms: ['fiebre'],
       image: null,
       languageCode: 'es',
+      profile: null,
     });
   });
 
