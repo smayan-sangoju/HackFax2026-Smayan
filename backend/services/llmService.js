@@ -119,26 +119,29 @@ Rules:
 - languageCode: ISO 639-1 code of the spoken language
 - Do NOT include markdown, code fences, or any text outside the JSON.`;
 
-function buildDiagnosisTranslationPrompt(condition, reasoning, targetLanguageCode) {
+function buildDiagnosisTranslationPrompt(condition, reasoning, nextSteps, targetLanguageCode) {
   const langLabel = LANGUAGE_LABELS[targetLanguageCode] || targetLanguageCode;
   return `Translate the following medical diagnosis into ${langLabel} (${targetLanguageCode}). Keep it simple, use everyday words.
 
 Condition: ${condition}
 Reasoning: ${reasoning}
+Next Steps: ${nextSteps || 'N/A'}
 
 Output ONLY strict JSON:
 {
   "condition": "...",
-  "reasoning": "..."
+  "reasoning": "...",
+  "nextSteps": "..."
 }
 
 Rules:
-- Translate both fields into ${langLabel}.
+- Translate all fields into ${langLabel}.
 - Keep the same meaning and tone.
+- If Next Steps is "N/A", set nextSteps to an empty string.
 - Do NOT include markdown, code fences, or any text outside the JSON.`;
 }
 
-const PROMPT_TEMPLATE = `You are a primary care doctor explaining triage results to an elderly patient. Use very simple, everyday words—like you're talking to a grandparent.
+const PROMPT_TEMPLATE = `You are a caring primary care doctor speaking directly to the patient. Use simple, everyday words—like you're talking to a family member.
 
 Patient's symptoms: {{symptoms}}
 
@@ -147,12 +150,32 @@ Output ONLY strict JSON:
   "condition": "...",
   "severity": 1,
   "reasoning": "...",
+  "nextSteps": "...",
   "languageCode": "en"
 }
 
-CRITICAL - Use simple language only:
-- "condition": Use a short, plain name. GOOD: "Insect bite or sting". BAD: "Localized inflammatory reaction" or "mild infection".
-- "reasoning": Write 2–3 short sentences. Use words a 10-year-old would understand.
+CRITICAL INSTRUCTIONS:
+
+1. USE PATIENT DEMOGRAPHICS INTELLIGENTLY:
+   - If patient info (age, gender, height, weight) is provided, use it to refine your assessment.
+   - Consider how the patient's demographic profile affects likelihood of certain conditions (e.g. certain conditions are more common in specific age groups or demographics).
+   - Do NOT explicitly mention the patient's age, weight, height, or BMI in your response. Instead, let those factors silently inform your conclusion.
+   - Do NOT say things like "because you are 68" or "given your weight". Just use the info to give a more accurate assessment.
+
+2. CONDITION: Use a short, plain name.
+   - GOOD: "Insect bite or sting", "Chest pain concern"
+   - BAD: "Localized inflammatory reaction", "mild infection"
+
+3. REASONING: Write 3–5 sentences speaking directly to the patient. Be warm and clear.
+   - Explain what could be going on and why their symptoms point to this.
+   - Address their specific symptoms individually and how they connect.
+   - Be specific to THEIR situation, not generic.
+
+4. NEXT STEPS: Write 2–4 actionable sentences the patient can follow right now.
+   - Include when to see a doctor vs. when it's safe to monitor at home.
+   - Mention any red flags that should prompt immediate care.
+   - Suggest simple things they can do at home if applicable (rest, ice, hydration, etc.).
+   - For severity 3: emphasize urgency clearly.
 
 BANNED PHRASES (never use these):
 - "The image displays" / "The image shows"
@@ -161,13 +184,17 @@ BANNED PHRASES (never use these):
 - "localized inflammatory" / "inflammatory response" / "inflammatory reaction"
 - "further supports" / "aligns with" / "suggests a"
 - "visual evidence" / "based on analysis"
+- "Based on your age" / "Given your weight" / "At your age" / "your BMI"
 
-GOOD reasoning example: "This looks like a reaction to an insect bite or sting. The redness and swelling you're seeing are common with this. It appears to be a moderate reaction—it would be a good idea to have it checked if it gets worse."
+GOOD reasoning example: "Your chest pain is something we should take seriously. The tightness you're feeling, especially with the shortness of breath, could be related to your heart. These symptoms together need prompt attention to rule out anything serious."
+
+GOOD nextSteps example: "Please go to the nearest emergency room or call 911 right away. While waiting, sit upright and try to stay calm. Do not exert yourself physically. If you have aspirin available and are not allergic, chew one tablet."
 
 BAD reasoning example: "The image displays a localized red area which is statistically consistent with an insect bite. The user's description further supports a significant local inflammatory response."
 
 Rules:
-- No medical advice.
+- Speak directly to the patient using "you" and "your".
+- No medical advice disclaimers inside the JSON (the app adds its own).
 - Only statistical likelihood.
 - Severity must be an integer: 1 = mild, 2 = moderate, 3 = severe.
 - Use severity 3 for dangerous symptoms (chest pain, fainting, stroke signs, severe bleeding, difficulty breathing).
@@ -205,6 +232,7 @@ function validateAndNormalize(obj, fallbackLanguageCode) {
 
   const condition = typeof obj.condition === 'string' ? obj.condition.trim() : '';
   const reasoning = typeof obj.reasoning === 'string' ? obj.reasoning.trim() : '';
+  const nextSteps = typeof obj.nextSteps === 'string' ? obj.nextSteps.trim() : '';
   const severity = Number(obj.severity);
   const rawLanguageCode = typeof obj.languageCode === 'string' ? obj.languageCode.trim().toLowerCase() : '';
   const languageCode = SUPPORTED_LANGUAGES.includes(rawLanguageCode)
@@ -221,7 +249,7 @@ function validateAndNormalize(obj, fallbackLanguageCode) {
     throw new Error('Invalid LLM response: severity must be 1, 2, or 3');
   }
 
-  return { condition, severity, reasoning, languageCode };
+  return { condition, severity, reasoning, nextSteps, languageCode };
 }
 
 function detectLanguageFromSymptoms(symptoms) {
@@ -335,6 +363,7 @@ async function translateDiagnosisFields(diagnosis, targetLanguageCode) {
   const prompt = buildDiagnosisTranslationPrompt(
     diagnosis.condition,
     diagnosis.reasoning,
+    diagnosis.nextSteps || '',
     targetLanguageCode
   );
 
@@ -348,6 +377,7 @@ async function translateDiagnosisFields(diagnosis, targetLanguageCode) {
 
   const translatedCondition = typeof parsed?.condition === 'string' ? parsed.condition.trim() : '';
   const translatedReasoning = typeof parsed?.reasoning === 'string' ? parsed.reasoning.trim() : '';
+  const translatedNextSteps = typeof parsed?.nextSteps === 'string' ? parsed.nextSteps.trim() : '';
 
   if (!translatedCondition || !translatedReasoning) {
     return diagnosis;
@@ -357,6 +387,7 @@ async function translateDiagnosisFields(diagnosis, targetLanguageCode) {
     ...diagnosis,
     condition: translatedCondition,
     reasoning: translatedReasoning,
+    nextSteps: translatedNextSteps || diagnosis.nextSteps || '',
     languageCode: targetLanguageCode,
   };
 }

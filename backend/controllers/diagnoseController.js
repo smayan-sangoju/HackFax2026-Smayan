@@ -152,6 +152,7 @@ async function diagnose(req, res) {
       condition: result.condition,
       severity: result.severity,
       reasoning: result.reasoning,
+      nextSteps: result.nextSteps || '',
       languageCode: result.languageCode || normalizedLanguageCode || 'en',
     });
   } catch (err) {

@@ -184,7 +184,8 @@ export default function Diagnosis() {
     // Start fresh
     setTtsError(null);
     setTtsState('loading');
-    const text = `${diagnosis.condition}. ${diagnosis.reasoning}`;
+    const nextStepsPart = diagnosis.nextSteps ? ` Next steps: ${diagnosis.nextSteps}` : '';
+    const text = `${diagnosis.condition}. ${diagnosis.reasoning}${nextStepsPart}`;
 
     try {
       const blob = await api.synthesizeTts({ text, languageCode });
@@ -308,6 +309,15 @@ export default function Diagnosis() {
           </p>
         )}
       </section>
+
+      {diagnosis.nextSteps && (
+        <section className={styles.card} aria-labelledby="nextsteps-heading">
+          <h2 id="nextsteps-heading" className={styles.cardTitle}>
+            What to do next
+          </h2>
+          <p className={styles.nextSteps}>{diagnosis.nextSteps}</p>
+        </section>
+      )}
 
       {/* Best hospital - highlighted */}
       {bestHospitalName && closestHospitals.length > 0 && (

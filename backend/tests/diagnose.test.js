@@ -73,6 +73,7 @@ describe('POST /diagnose', () => {
       condition: 'tension headache',
       severity: 1,
       reasoning: 'Common pattern for stress.',
+      nextSteps: '',
       languageCode: 'en',
     });
     expect(llmService.generateDiagnosis).toHaveBeenCalledWith({
