@@ -90,6 +90,20 @@ Rules:
 - Severity 3 ending: "You should seek medical care as soon as possible."
 - Output ONLY the JSON. No markdown or extra text.`;
 
+function profileToPrompt(profile) {
+  if (!profile || typeof profile !== 'object') {
+    return 'No profile context provided.';
+  }
+
+  const fields = [];
+  if (Number.isFinite(profile.age)) fields.push(`age=${Math.round(profile.age)}`);
+  if (typeof profile.gender === 'string' && profile.gender.trim()) fields.push(`gender=${profile.gender.trim()}`);
+  if (Number.isFinite(profile.heightCm)) fields.push(`heightCm=${Math.round(profile.heightCm)}`);
+  if (Number.isFinite(profile.weightKg)) fields.push(`weightKg=${Math.round(profile.weightKg)}`);
+
+  return fields.length ? fields.join(', ') : 'No profile context provided.';
+}
+
 function parseJsonFromText(text) {
   const raw = String(text || '').trim();
   if (!raw) {
@@ -175,6 +189,7 @@ function normalizeImage(image) {
 async function generateDiagnosis(input) {
   const symptoms = input?.symptoms;
   const image = input?.image || null;
+  const profile = input?.profile || null;
 
   if (!Array.isArray(symptoms) || !symptoms.every((s) => typeof s === 'string' && s.trim())) {
     const err = new Error('Invalid symptoms input');
@@ -208,6 +223,7 @@ async function generateDiagnosis(input) {
   const symptomsStr = symptoms.length > 0
     ? symptoms.map((s) => s.trim()).join(', ')
     : 'No textual symptoms provided.';
+  const profileStr = profileToPrompt(profile);
   const imageGuidance = image
     ? 'An image is attached. Use what you see to help your assessment, but describe it in simple words only (e.g. "red and swollen" not "localized inflammatory reaction"). Never say "The image displays" or "visual evidence".'
     : 'No image is attached. Use only the symptoms text.';
